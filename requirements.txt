@@ -1,5 +1,5 @@
 flask
 gunicorn
 requests
-openai
+google-generativeai
 psycopg2-binary
