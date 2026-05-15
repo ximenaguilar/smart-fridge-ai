@@ -1,6 +1,5 @@
 flask
-pandas
-scikit-learn
-joblib
-requests
 gunicorn
+requests
+openai
+psycopg2-binary
