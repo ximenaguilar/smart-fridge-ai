@@ -1,17 +1,19 @@
 from flask import Flask, request, jsonify
-from datetime import datetime
 import os
 import json
 import psycopg2
-from openai import OpenAI
+import google.generativeai as genai
 
 app = Flask(__name__)
 
+# Variables de entorno
 DATABASE_URL = os.getenv("DATABASE_URL")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# Configurar Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+modelo_gemini = genai.GenerativeModel(GEMINI_MODEL)
 
 
 def get_connection():
@@ -33,33 +35,10 @@ def crear_tabla():
             tiempo_puerta INTEGER,
             aperturas INTEGER,
             estado VARCHAR(50),
+            riesgos TEXT,
             recomendacion TEXT
         );
     """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-def guardar_lectura(data, estado, recomendacion):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO lecturas
-        (temperatura, humedad, gas, puerta, tiempo_puerta, aperturas, estado, recomendacion)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-    """, (
-        data["temperatura"],
-        data["humedad"],
-        data["gas"],
-        data["puerta"],
-        data["tiempo_puerta"],
-        data["aperturas"],
-        estado,
-        recomendacion
-    ))
 
     conn.commit()
     cur.close()
@@ -78,10 +57,12 @@ def obtener_historial(limit=20):
     """, (limit,))
 
     filas = cur.fetchall()
+
     cur.close()
     conn.close()
 
     historial = []
+
     for fila in filas:
         historial.append({
             "temperatura": fila[0],
@@ -128,41 +109,76 @@ def diagnostico_tecnico(data, historial):
         if estado != "alerta":
             estado = "advertencia"
 
-    resumen = {
+    if not riesgos:
+        riesgos.append("condiciones normales")
+
+    return {
         "estado": estado,
         "riesgos": riesgos,
-        "lecturas_actuales": data,
+        "lectura_actual": data,
         "historial_reciente": historial
     }
 
-    return resumen
 
-
-def generar_recomendacion_con_openai(resumen):
-    if client is None:
-        return "No hay API Key de OpenAI configurada. El sistema detectó el estado, pero no pudo generar recomendación avanzada."
+def generar_recomendacion_ia(resumen):
+    if not GEMINI_API_KEY:
+        return "No hay API Key de Gemini configurada. El sistema realizó el diagnóstico técnico, pero no pudo generar una recomendación avanzada."
 
     prompt = f"""
-Eres un asistente técnico para un sistema IoT llamado Smart Fridge Monitor.
+Eres un asistente inteligente especializado en monitoreo IoT de refrigeradores.
 
-Analiza las lecturas de un refrigerador y genera una recomendación profesional, clara y útil para el usuario.
+Tu tarea es analizar las lecturas del sistema Smart Fridge Monitor y generar una recomendación profesional para el usuario.
 
-No inventes datos.
-No digas que puedes reparar el equipo.
-Explica el posible impacto en conservación de alimentos y consumo energético.
-Usa máximo 3 oraciones.
-Debe sonar como una IA inteligente, no como una regla simple.
+Debes tomar en cuenta:
+- Temperatura
+- Humedad
+- Calidad del aire
+- Estado de la puerta
+- Tiempo de apertura
+- Frecuencia de aperturas
+- Historial reciente
 
-Datos:
+Reglas de redacción:
+- No inventes datos.
+- No digas que puedes reparar el refrigerador.
+- Explica el posible impacto en conservación de alimentos.
+- Explica el posible impacto en consumo energético.
+- Usa lenguaje natural, profesional y claro.
+- Máximo 3 oraciones.
+- La respuesta debe parecer escrita por una IA inteligente, no por una regla simple.
+
+Datos del sistema:
 {json.dumps(resumen, ensure_ascii=False)}
 """
 
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        input=prompt
-    )
+    respuesta = modelo_gemini.generate_content(prompt)
 
-    return response.output_text.strip()
+    return respuesta.text.strip()
+
+
+def guardar_lectura(data, estado, riesgos, recomendacion):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO lecturas
+        (temperatura, humedad, gas, puerta, tiempo_puerta, aperturas, estado, riesgos, recomendacion)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+    """, (
+        data["temperatura"],
+        data["humedad"],
+        data["gas"],
+        data["puerta"],
+        data["tiempo_puerta"],
+        data["aperturas"],
+        estado,
+        ", ".join(riesgos),
+        recomendacion
+    ))
+
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 @app.route("/")
@@ -170,7 +186,8 @@ def home():
     return jsonify({
         "mensaje": "Servidor IA Smart Fridge funcionando correctamente",
         "base_datos": "PostgreSQL en la nube",
-        "ia": "OpenAI API"
+        "ia": "Gemini API",
+        "modelo": GEMINI_MODEL
     })
 
 
@@ -188,13 +205,14 @@ def analizar():
             "aperturas": int(data.get("aperturas", 0))
         }
 
-        historial = obtener_historial()
+        historial = obtener_historial(20)
         resumen = diagnostico_tecnico(lectura, historial)
-        recomendacion = generar_recomendacion_con_openai(resumen)
+        recomendacion = generar_recomendacion_ia(resumen)
 
         guardar_lectura(
             lectura,
             resumen["estado"],
+            resumen["riesgos"],
             recomendacion
         )
 
@@ -217,6 +235,7 @@ def historial():
     try:
         datos = obtener_historial(50)
         return jsonify(datos)
+
     except Exception as e:
         return jsonify({
             "error": str(e)
@@ -225,6 +244,7 @@ def historial():
 
 if DATABASE_URL:
     crear_tabla()
+
 
 if __name__ == "__main__":
     app.run(debug=True)
