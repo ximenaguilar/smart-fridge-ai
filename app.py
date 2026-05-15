@@ -26,17 +26,17 @@ def crear_tabla():
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS lecturas (
-    id SERIAL PRIMARY KEY,
-    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    temperatura FLOAT,
-    humedad FLOAT,
-    gas INTEGER,
-    puerta INTEGER,
-    tiempo_puerta INTEGER,
-    aperturas INTEGER,
-    estado VARCHAR(50),
-    recomendacion TEXT
-);
+            id SERIAL PRIMARY KEY,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            temperatura FLOAT,
+            humedad FLOAT,
+            gas INTEGER,
+            puerta INTEGER,
+            tiempo_puerta INTEGER,
+            aperturas INTEGER,
+            estado VARCHAR(50),
+            recomendacion TEXT
+        );
     """)
 
     conn.commit()
@@ -175,7 +175,7 @@ def recomendacion_respaldo(resumen):
     texto = "Se detectaron condiciones anómalas: " + ", ".join(riesgos) + ". "
 
     if "temperatura elevada" in riesgos:
-        texto += "La temperatura elevada puede afectar la conservación de alimentos y obligar al sistema a trabajar más para recuperar el frío. "
+        texto += "La temperatura elevada puede afectar la conservación de alimentos y hacer que el sistema trabaje más para recuperar el frío. "
 
     if "humedad alta" in riesgos:
         texto += "La humedad alta puede favorecer condensación interna y deterioro más rápido de productos sensibles. "
@@ -189,14 +189,14 @@ def recomendacion_respaldo(resumen):
     return texto.strip()
 
 
-def guardar_lectura(data, estado, riesgos, recomendacion):
+def guardar_lectura(data, estado, recomendacion):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
         INSERT INTO lecturas
-        (temperatura, humedad, gas, puerta, tiempo_puerta, aperturas, estado, riesgos, recomendacion)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+        (temperatura, humedad, gas, puerta, tiempo_puerta, aperturas, estado, recomendacion)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
     """, (
         data["temperatura"],
         data["humedad"],
@@ -205,7 +205,6 @@ def guardar_lectura(data, estado, riesgos, recomendacion):
         data["tiempo_puerta"],
         data["aperturas"],
         estado,
-        ", ".join(riesgos),
         recomendacion
     ))
 
@@ -219,7 +218,7 @@ def home():
     return jsonify({
         "mensaje": "Servidor IA Smart Fridge funcionando correctamente",
         "base_datos": "PostgreSQL en la nube",
-        "ia": "Groq API",
+        "ia": "Groq API con respaldo local",
         "modelo": GROQ_MODEL
     })
 
@@ -251,7 +250,6 @@ def analizar():
         guardar_lectura(
             lectura,
             resumen["estado"],
-            resumen["riesgos"],
             recomendacion
         )
 
