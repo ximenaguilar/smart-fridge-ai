@@ -2,18 +2,18 @@ from flask import Flask, request, jsonify
 import os
 import json
 import psycopg2
-import google.generativeai as genai
+from openai import OpenAI
 
 app = Flask(__name__)
 
-# Variables de entorno
 DATABASE_URL = os.getenv("DATABASE_URL")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-# Configurar Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-modelo_gemini = genai.GenerativeModel(GEMINI_MODEL)
+client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
 
 def get_connection():
@@ -57,7 +57,6 @@ def obtener_historial(limit=20):
     """, (limit,))
 
     filas = cur.fetchall()
-
     cur.close()
     conn.close()
 
@@ -120,40 +119,75 @@ def diagnostico_tecnico(data, historial):
     }
 
 
-def generar_recomendacion_ia(resumen):
-    if not GEMINI_API_KEY:
-        return "No hay API Key de Gemini configurada. El sistema realizó el diagnóstico técnico, pero no pudo generar una recomendación avanzada."
-
+def generar_recomendacion_groq(resumen):
     prompt = f"""
-Eres un asistente inteligente especializado en monitoreo IoT de refrigeradores.
+Eres un asistente técnico especializado en sistemas IoT de refrigeración.
 
-Tu tarea es analizar las lecturas del sistema Smart Fridge Monitor y generar una recomendación profesional para el usuario.
+Analiza las lecturas del proyecto Smart Fridge Monitor y genera una recomendación profesional para el usuario.
 
-Debes tomar en cuenta:
+Toma en cuenta:
 - Temperatura
 - Humedad
 - Calidad del aire
-- Estado de la puerta
+- Estado de puerta
 - Tiempo de apertura
-- Frecuencia de aperturas
+- Frecuencia de apertura
 - Historial reciente
 
-Reglas de redacción:
+Reglas:
 - No inventes datos.
 - No digas que puedes reparar el refrigerador.
-- Explica el posible impacto en conservación de alimentos.
-- Explica el posible impacto en consumo energético.
-- Usa lenguaje natural, profesional y claro.
+- Explica posible impacto en conservación de alimentos.
+- Explica posible impacto en consumo energético.
 - Máximo 3 oraciones.
-- La respuesta debe parecer escrita por una IA inteligente, no por una regla simple.
+- Responde en español.
+- Debe sonar como una IA profesional, no como un simple if.
 
-Datos del sistema:
+Datos:
 {json.dumps(resumen, ensure_ascii=False)}
 """
 
-    respuesta = modelo_gemini.generate_content(prompt)
+    respuesta = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "Eres una IA técnica para análisis IoT de refrigeradores."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.4,
+        max_tokens=180
+    )
 
-    return respuesta.text.strip()
+    return respuesta.choices[0].message.content.strip()
+
+
+def recomendacion_respaldo(resumen):
+    estado = resumen["estado"]
+    riesgos = resumen["riesgos"]
+
+    if estado == "normal":
+        return "El refrigerador opera dentro de condiciones estables. No se detectan riesgos inmediatos para la conservación de alimentos ni señales de uso energético ineficiente."
+
+    texto = "Se detectaron condiciones anómalas: " + ", ".join(riesgos) + ". "
+
+    if "temperatura elevada" in riesgos:
+        texto += "La temperatura elevada puede afectar la conservación de alimentos y obligar al sistema a trabajar más para recuperar el frío. "
+
+    if "humedad alta" in riesgos:
+        texto += "La humedad alta puede favorecer condensación interna y deterioro más rápido de productos sensibles. "
+
+    if "calidad de aire deficiente" in riesgos:
+        texto += "La calidad de aire deficiente puede indicar presencia de gases o alimentos en posible deterioro. "
+
+    if "puerta abierta por tiempo prolongado" in riesgos or "frecuencia alta de aperturas" in riesgos:
+        texto += "El patrón de apertura puede incrementar la pérdida de frío y elevar el consumo energético."
+
+    return texto.strip()
 
 
 def guardar_lectura(data, estado, riesgos, recomendacion):
@@ -186,8 +220,8 @@ def home():
     return jsonify({
         "mensaje": "Servidor IA Smart Fridge funcionando correctamente",
         "base_datos": "PostgreSQL en la nube",
-        "ia": "Gemini API",
-        "modelo": GEMINI_MODEL
+        "ia": "Groq API",
+        "modelo": GROQ_MODEL
     })
 
 
@@ -207,7 +241,13 @@ def analizar():
 
         historial = obtener_historial(20)
         resumen = diagnostico_tecnico(lectura, historial)
-        recomendacion = generar_recomendacion_ia(resumen)
+
+        try:
+            recomendacion = generar_recomendacion_groq(resumen)
+            fuente_ia = "groq"
+        except Exception:
+            recomendacion = recomendacion_respaldo(resumen)
+            fuente_ia = "motor_local_respaldo"
 
         guardar_lectura(
             lectura,
@@ -219,6 +259,7 @@ def analizar():
         return jsonify({
             "estado": resumen["estado"],
             "riesgos": resumen["riesgos"],
+            "fuente_ia": fuente_ia,
             "recomendacion": recomendacion
         })
 
@@ -235,7 +276,6 @@ def historial():
     try:
         datos = obtener_historial(50)
         return jsonify(datos)
-
     except Exception as e:
         return jsonify({
             "error": str(e)
