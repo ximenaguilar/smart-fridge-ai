@@ -26,18 +26,17 @@ def crear_tabla():
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS lecturas (
-            id SERIAL PRIMARY KEY,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            temperatura FLOAT,
-            humedad FLOAT,
-            gas INTEGER,
-            puerta INTEGER,
-            tiempo_puerta INTEGER,
-            aperturas INTEGER,
-            estado VARCHAR(50),
-            riesgos TEXT,
-            recomendacion TEXT
-        );
+    id SERIAL PRIMARY KEY,
+    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    temperatura FLOAT,
+    humedad FLOAT,
+    gas INTEGER,
+    puerta INTEGER,
+    tiempo_puerta INTEGER,
+    aperturas INTEGER,
+    estado VARCHAR(50),
+    recomendacion TEXT
+);
     """)
 
     conn.commit()
