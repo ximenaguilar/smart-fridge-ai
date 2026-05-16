@@ -1,0 +1,254 @@
+#define BLYNK_TEMPLATE_ID "TMPL2Nso1XK4i"
+#define BLYNK_TEMPLATE_NAME "smartfridge"
+#define BLYNK_AUTH_TOKEN "eL2ecbHvpHT4jltHcTgEbGdpOlBKY6qO"
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <DHT.h>
+
+char ssid[] = "iPhone de Joselin";
+char pass[] = "Joselin123@";
+
+String IA_SERVER_URL = "https://smart-fridge-ai-ok1h.onrender.com/analizar";
+
+#define DHT_PIN 18
+#define DHT_TYPE DHT22
+#define LED_PIN 19
+#define BUZZER_PIN 23
+#define DOOR_PIN 15
+#define GAS_PIN 34
+
+DHT dht(DHT_PIN, DHT_TYPE);
+
+float TEMP_MAX = 8.0;
+float HUM_MAX = 60.0;
+int GAS_LEVEL_MAX = 400;
+
+// Lectura de sensores cada 5 segundos
+unsigned long lastRead = 0;
+const unsigned long interval = 5000;
+
+// Consulta IA cada 60 segundos
+unsigned long lastIA = 0;
+const unsigned long iaInterval = 60000;
+
+unsigned long doorOpenStart = 0;
+const unsigned long doorAlertTime = 10000;
+
+unsigned long lastBuzzerChange = 0;
+const unsigned long buzzerInterval = 500;
+
+bool buzzerState = false;
+bool buzzerAlert = false;
+
+bool tempEvent = false;
+bool humEvent = false;
+bool gasEvent = false;
+bool doorEvent = false;
+
+bool lastDoorState = false;
+int doorOpenCount = 0;
+unsigned long totalDoorOpenTime = 0;
+unsigned long lastDoorDuration = 0;
+
+String extraerRecomendacion(String respuesta) {
+  String clave = "\"recomendacion\":\"";
+  int inicio = respuesta.indexOf(clave);
+
+  if (inicio == -1) {
+    return "No se pudo leer recomendacion IA";
+  }
+
+  inicio += clave.length();
+  int fin = respuesta.indexOf("\"", inicio);
+
+  if (fin == -1) {
+    return "Respuesta IA incompleta";
+  }
+
+  String recomendacion = respuesta.substring(inicio, fin);
+
+  recomendacion.replace("\\n", " ");
+  recomendacion.replace("\\\"", "\"");
+  recomendacion.replace("\\", "");
+
+  return recomendacion;
+}
+
+void enviarDatosIA(float temp, float hum, int gasLevel, bool doorOpen, unsigned long doorTime, int aperturas) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+
+    http.begin(IA_SERVER_URL);
+    http.addHeader("Content-Type", "application/json");
+
+    String json = "{";
+    json += "\"temperatura\":" + String(temp, 2) + ",";
+    json += "\"humedad\":" + String(hum, 2) + ",";
+    json += "\"gas\":" + String(gasLevel) + ",";
+    json += "\"puerta\":" + String(doorOpen ? 1 : 0) + ",";
+    json += "\"tiempo_puerta\":" + String(doorTime / 1000) + ",";
+    json += "\"aperturas\":" + String(aperturas);
+    json += "}";
+
+    int responseCode = http.POST(json);
+    String respuesta = http.getString();
+
+    Serial.println("------ ENVIO A IA ------");
+    Serial.println(json);
+    Serial.print("Codigo HTTP: ");
+    Serial.println(responseCode);
+    Serial.print("Respuesta IA: ");
+    Serial.println(respuesta);
+
+    if (responseCode == 200) {
+      String recomendacion = extraerRecomendacion(respuesta);
+
+      Serial.println("Recomendacion IA:");
+      Serial.println(recomendacion);
+
+      Blynk.virtualWrite(V10, recomendacion);
+    } else {
+      Serial.println("Error al consultar IA");
+      Blynk.virtualWrite(V10, "Servidor IA no disponible temporalmente");
+    }
+
+    http.end();
+  } else {
+    Serial.println("WiFi no conectado, no se envio a IA");
+    Blynk.virtualWrite(V10, "WiFi no conectado");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(DOOR_PIN, INPUT_PULLUP);
+  pinMode(GAS_PIN, INPUT);
+
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  dht.begin();
+
+  Serial.println("SMART FRIDGE MONITOR + BLYNK + IA");
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+}
+
+void loop() {
+  Blynk.run();
+
+  unsigned long now = millis();
+
+  if (now - lastRead >= interval) {
+    lastRead = now;
+
+    float temp = dht.readTemperature();
+    float hum = dht.readHumidity();
+
+    if (isnan(temp) || isnan(hum)) {
+      Serial.println("Error leyendo DHT22");
+      return;
+    }
+
+    bool doorOpen = digitalRead(DOOR_PIN) == HIGH;
+
+    if (doorOpen && !lastDoorState) {
+      doorOpenCount++;
+      doorOpenStart = now;
+    }
+
+    if (!doorOpen && lastDoorState) {
+      lastDoorDuration = now - doorOpenStart;
+      totalDoorOpenTime += lastDoorDuration;
+      doorOpenStart = 0;
+    }
+
+    unsigned long currentDoorTime = 0;
+
+    if (doorOpen && doorOpenStart > 0) {
+      currentDoorTime = now - doorOpenStart;
+    }
+
+    lastDoorState = doorOpen;
+
+    bool doorTooLong = doorOpen && currentDoorTime >= doorAlertTime;
+
+    int gasRaw = analogRead(GAS_PIN);
+    int gasLevel = map(gasRaw, 0, 4095, 0, 1000);
+
+    bool ledAlert = doorOpen || gasLevel > GAS_LEVEL_MAX;
+    buzzerAlert = temp > TEMP_MAX || hum > HUM_MAX || doorTooLong;
+
+    digitalWrite(LED_PIN, ledAlert ? HIGH : LOW);
+
+    Blynk.virtualWrite(V0, temp);
+    Blynk.virtualWrite(V1, hum);
+    Blynk.virtualWrite(V2, gasLevel);
+    Blynk.virtualWrite(V3, doorOpen ? 1 : 0);
+    Blynk.virtualWrite(V4, ledAlert ? 1 : 0);
+    Blynk.virtualWrite(V5, buzzerAlert ? 1 : 0);
+    Blynk.virtualWrite(V6, doorOpenCount);
+    Blynk.virtualWrite(V7, currentDoorTime / 1000);
+    Blynk.virtualWrite(V8, totalDoorOpenTime / 1000);
+
+    if (temp > TEMP_MAX && !tempEvent) {
+      Blynk.logEvent("temp_alta", "Temperatura alta");
+      tempEvent = true;
+    } else if (temp <= TEMP_MAX) {
+      tempEvent = false;
+    }
+
+    if (hum > HUM_MAX && !humEvent) {
+      Blynk.logEvent("humedad_alta", "Humedad alta");
+      humEvent = true;
+    } else if (hum <= HUM_MAX) {
+      humEvent = false;
+    }
+
+    if (gasLevel > GAS_LEVEL_MAX && !gasEvent) {
+      Blynk.logEvent("aire_malo", "Aire en mal estado");
+      gasEvent = true;
+    } else if (gasLevel <= GAS_LEVEL_MAX) {
+      gasEvent = false;
+    }
+
+    if (doorTooLong && !doorEvent) {
+      Blynk.logEvent("puerta_abierta", "Puerta abierta mucho tiempo");
+      doorEvent = true;
+    } else if (!doorTooLong) {
+      doorEvent = false;
+    }
+
+    if (now - lastIA >= iaInterval) {
+      lastIA = now;
+      enviarDatosIA(temp, hum, gasLevel, doorOpen, currentDoorTime, doorOpenCount);
+    }
+
+    Serial.println("------ ESTADO ------");
+    Serial.print("Temp: "); Serial.println(temp);
+    Serial.print("Hum: "); Serial.println(hum);
+    Serial.print("Gas: "); Serial.println(gasLevel);
+    Serial.print("Puerta: "); Serial.println(doorOpen ? "ABIERTA" : "CERRADA");
+    Serial.print("Aperturas: "); Serial.println(doorOpenCount);
+    Serial.print("Tiempo puerta actual: ");
+    Serial.print(currentDoorTime / 1000);
+    Serial.println(" segundos");
+    Serial.println();
+  }
+
+  if (buzzerAlert) {
+    if (now - lastBuzzerChange >= buzzerInterval) {
+      lastBuzzerChange = now;
+      buzzerState = !buzzerState;
+      digitalWrite(BUZZER_PIN, buzzerState ? HIGH : LOW);
+    }
+  } else {
+    buzzerState = false;
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
