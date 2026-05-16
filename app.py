@@ -158,7 +158,7 @@ Datos:
                 "content": prompt
             }
         ],
-        temperature=0.4,
+        temperature=0.6,
         max_tokens=180
     )
 
@@ -170,21 +170,37 @@ def recomendacion_respaldo(resumen):
     riesgos = resumen["riesgos"]
 
     if estado == "normal":
-        return "El refrigerador opera dentro de condiciones estables. No se detectan riesgos inmediatos para la conservación de alimentos ni señales de uso energético ineficiente."
+        return (
+            "El refrigerador opera dentro de condiciones estables. "
+            "No se detectan riesgos inmediatos para la conservación de alimentos "
+            "ni señales de uso energético ineficiente."
+        )
 
     texto = "Se detectaron condiciones anómalas: " + ", ".join(riesgos) + ". "
 
     if "temperatura elevada" in riesgos:
-        texto += "La temperatura elevada puede afectar la conservación de alimentos y hacer que el sistema trabaje más para recuperar el frío. "
+        texto += (
+            "La temperatura elevada puede afectar la conservación de alimentos "
+            "y hacer que el sistema trabaje más para recuperar el frío. "
+        )
 
     if "humedad alta" in riesgos:
-        texto += "La humedad alta puede favorecer condensación interna y deterioro más rápido de productos sensibles. "
+        texto += (
+            "La humedad alta puede favorecer condensación interna y deterioro "
+            "más rápido de productos sensibles. "
+        )
 
     if "calidad de aire deficiente" in riesgos:
-        texto += "La calidad de aire deficiente puede indicar presencia de gases o alimentos en posible deterioro. "
+        texto += (
+            "La calidad de aire deficiente puede indicar presencia de gases "
+            "o alimentos en posible deterioro. "
+        )
 
     if "puerta abierta por tiempo prolongado" in riesgos or "frecuencia alta de aperturas" in riesgos:
-        texto += "El patrón de apertura puede incrementar la pérdida de frío y elevar el consumo energético."
+        texto += (
+            "El patrón de apertura puede incrementar la pérdida de frío "
+            "y elevar el consumo energético."
+        )
 
     return texto.strip()
 
@@ -223,6 +239,34 @@ def home():
     })
 
 
+@app.route("/test-groq", methods=["GET"])
+def test_groq():
+    try:
+        respuesta = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Responde solo: Groq funcionando correctamente"
+                }
+            ],
+            max_tokens=30
+        )
+
+        return jsonify({
+            "estado": "ok",
+            "modelo": GROQ_MODEL,
+            "respuesta": respuesta.choices[0].message.content
+        })
+
+    except Exception as e:
+        return jsonify({
+            "estado": "error",
+            "modelo": GROQ_MODEL,
+            "error": str(e)
+        }), 500
+
+
 @app.route("/analizar", methods=["POST"])
 def analizar():
     try:
@@ -240,10 +284,14 @@ def analizar():
         historial = obtener_historial(20)
         resumen = diagnostico_tecnico(lectura, historial)
 
+        error_ia = None
+
         try:
             recomendacion = generar_recomendacion_groq(resumen)
             fuente_ia = "groq"
-        except Exception:
+        except Exception as e:
+            error_ia = str(e)
+            print("ERROR GROQ:", error_ia)
             recomendacion = recomendacion_respaldo(resumen)
             fuente_ia = "motor_local_respaldo"
 
@@ -257,6 +305,7 @@ def analizar():
             "estado": resumen["estado"],
             "riesgos": resumen["riesgos"],
             "fuente_ia": fuente_ia,
+            "error_ia": error_ia,
             "recomendacion": recomendacion
         })
 
